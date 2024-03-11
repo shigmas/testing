@@ -47,7 +47,6 @@ func TestGetInt(t *testing.T) {
 		{"Expected value", url.Values{"foo": []string{"3"}}, "foo", 3, false},
 		{"Not int", url.Values{"foo": []string{"int", "5"}}, "foo", 3, true},
 	}
-
 	for _, tCase := range testCases {
 		t.Run(tCase.name, func(t *testing.T) {
 			res, err := getInt(tCase.formVals, tCase.key)
@@ -69,6 +68,7 @@ func (mrc MyReadCloser) Close() error {
 }
 
 func TestBuildOperation(t *testing.T) {
+	h := operationsHandler{}
 	testGetCases := []struct {
 		name        string
 		formVals    url.Values
@@ -82,7 +82,7 @@ func TestBuildOperation(t *testing.T) {
 			req := http.Request{}
 			req.Method = http.MethodGet
 			req.Form = tCase.formVals
-			_, err := BuildOperation("add", &req)
+			_, err := h.BuildOperation("add", &req)
 			if tCase.expectError {
 				assert.Error(t, err, "expected error")
 			}
@@ -105,7 +105,7 @@ func TestBuildOperation(t *testing.T) {
 			req.Method = http.MethodPost
 			body := MyReadCloser{bytes.NewReader([]byte(tCase.body))}
 			req.Body = body
-			_, err := BuildOperation("add", &req)
+			_, err := h.BuildOperation("add", &req)
 			if tCase.expectError {
 				assert.Error(t, err, "expected error")
 			}

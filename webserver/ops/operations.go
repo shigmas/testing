@@ -74,7 +74,7 @@ func getInt(formVals url.Values, key string) (int64, error) {
 }
 
 // BuildOperation takes the op and the request and fills out the Operation
-func BuildOperation(op Op, req *http.Request) (Operation, error) {
+func (h *operationsHandler) BuildOperation(op Op, req *http.Request) (Operation, error) {
 	oper := Operation{
 		Oper: op,
 	}
@@ -101,6 +101,8 @@ func BuildOperation(op Op, req *http.Request) (Operation, error) {
 		if err = decoder.Decode(&vals); err != nil {
 			return oper, fmt.Errorf("failed to decode body: %w", err)
 		}
+		oper.Operand1 = vals.Operand1
+		oper.Operand2 = vals.Operand2
 	default:
 		return oper, nil
 	}
@@ -109,7 +111,7 @@ func BuildOperation(op Op, req *http.Request) (Operation, error) {
 }
 
 // SendOperationResult Sends the result of the operation.
-func SendOperationResult(op Operation, w http.ResponseWriter) {
+func (h *operationsHandler) SendOperationResult(op Operation, w http.ResponseWriter) {
 	switch op.Oper {
 	case Add:
 		op.Result = op.Operand1 + op.Operand2
@@ -120,18 +122,37 @@ func SendOperationResult(op Operation, w http.ResponseWriter) {
 	case Error:
 		// no op. we shouldn't be here
 	}
+
 	data, err := json.Marshal(op)
 	if err != nil {
 		http.Error(w, "Failure in marshaling data: %s"+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	w.Header().Add("content-type", "application/json")
 	w.Write(data)
 }
 
+func (h *operationsHandler) isJsonContent(req *http.Request) bool {
+	ct := req.Header.Get("Content-Type")
+	if ct != "" {
+		mediaType := strings.ToLower(strings.TrimSpace(strings.Split(ct, ";")[0]))
+		return mediaType == "application/json"
+	}
+	return false
+}
+
 func (h *operationsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+
 	// our sub handler.
-	req.ParseForm()
+	if !h.isJsonContent(req) {
+		// ParseForm will ReadAll on the body, which is before we can unmarshal
+		// JSON
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "Unable to parse form: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	op, err := GetOp(req.URL.Path)
 	if err != nil {
 		http.Error(w, "Invalid operation in "+req.URL.Path, http.StatusBadRequest)
@@ -142,11 +163,11 @@ func (h *operationsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 		http.Error(w, "User requested error", http.StatusInternalServerError)
 		return
 	case Add, Subtract, Echo:
-		operation, err := BuildOperation(op, req)
+		operation, err := h.BuildOperation(op, req)
 		if err != nil {
 			http.Error(w, "Failure in arguments: %s"+err.Error(), http.StatusBadRequest)
 		}
-		SendOperationResult(operation, w)
+		h.SendOperationResult(operation, w)
 	default:
 		w.Write([]byte("[\"add\",\"subtract\",\"echo\",\"error\"]"))
 	}
