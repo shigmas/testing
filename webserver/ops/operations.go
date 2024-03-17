@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
 // Base is the url base for Operations
 const Base = "ops"
+
+var opsRe, _ = regexp.Compile(`^/ops/([[:alnum:]]+)\??(.*)$`)
 
 // Op is the type for the operation
 type Op string
@@ -22,6 +25,7 @@ const (
 	Subtract    = "subtract"
 	Echo        = "echo"
 	Error       = "error"
+	List        = "list"
 )
 
 // These are the consts for the arguments in the URL or body
@@ -41,17 +45,19 @@ type Operation struct {
 type operationsHandler struct {
 }
 
+// Stupid string wrapper for testing returning JSON objects
+type testListObject struct {
+	D string `json:"data"`
+}
+
 // GetOp will get the operation from the URL
-func GetOp(urlPath string) (Op, error) {
-	// why doesn't filepath.Splist work?
-	parts := strings.Split(urlPath, "/")
-	if len(parts) < 2 || parts[1] != Base {
-		return "", fmt.Errorf("url path does not have leading %s", Base)
+func GetOp(urlPath string) (Op, string, error) {
+	parts := opsRe.FindSubmatch([]byte(urlPath))
+	if parts == nil {
+		return "", "", fmt.Errorf("url path does not match pattern")
 	}
-	if len(parts) == 3 {
-		return Op(parts[2]), nil
-	}
-	return "", nil
+
+	return Op(string(parts[1])), string(parts[2]), nil
 }
 
 // InstallHandlers installs the ops hander on the mux
@@ -142,7 +148,6 @@ func (h *operationsHandler) isJsonContent(req *http.Request) bool {
 }
 
 func (h *operationsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-
 	// our sub handler.
 	if !h.isJsonContent(req) {
 		// ParseForm will ReadAll on the body, which is before we can unmarshal
@@ -153,7 +158,7 @@ func (h *operationsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
-	op, err := GetOp(req.URL.Path)
+	op, params, err := GetOp(req.URL.Path)
 	if err != nil {
 		http.Error(w, "Invalid operation in "+req.URL.Path, http.StatusBadRequest)
 		return
@@ -165,9 +170,33 @@ func (h *operationsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 	case Add, Subtract, Echo:
 		operation, err := h.BuildOperation(op, req)
 		if err != nil {
-			http.Error(w, "Failure in arguments: %s"+err.Error(), http.StatusBadRequest)
+			http.Error(w, "Failure in arguments: "+err.Error(), http.StatusBadRequest)
 		}
 		h.SendOperationResult(operation, w)
+	case List:
+		parsed := req.URL.Query()
+		var err error
+		if params != "" {
+			parsed, err = url.ParseQuery(params)
+		}
+		if err != nil {
+			http.Error(w, "Bad URL parameters: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		args := parsed["arg"]
+		if len(args) == 0 {
+			http.Error(w, "Need arguments in arg", http.StatusBadRequest)
+			return
+		}
+		returnData := make([]testListObject, 0)
+		for _, arg := range args {
+			returnData = append(returnData, testListObject{D: arg})
+		}
+		data, err := json.Marshal(returnData)
+		if err != nil {
+			http.Error(w, "Failure in list marshaling: %s"+err.Error(), http.StatusBadRequest)
+		}
+		w.Write(data)
 	default:
 		w.Write([]byte("[\"add\",\"subtract\",\"echo\",\"error\"]"))
 	}

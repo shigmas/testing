@@ -2,12 +2,40 @@ package ops
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+func TestRegexp(t *testing.T) {
+	testCases := []struct {
+		name         string
+		path         string
+		expectMatch  bool
+		expectOp     string
+		expectParams string
+	}{
+		{"noArgs", "/ops/foo", true, "foo", ""},
+		{"args", "/ops/foo?blah", true, "foo", "blah"},
+	}
+
+	for _, tCase := range testCases {
+		t.Run(tCase.name, func(t *testing.T) {
+			parts := opsRe.FindSubmatch([]byte(tCase.path))
+			if !tCase.expectMatch {
+				assert.Nil(t, parts, "did not expect match")
+				return
+			}
+			assert.Equal(t, tCase.expectOp, string(parts[1]), "capture did not match")
+			assert.Equal(t, tCase.expectParams, string(parts[2]), "capture did not match")
+		})
+	}
+
+}
 
 func TestOperationsHandler(t *testing.T) {
 	mux := http.NewServeMux()
@@ -25,12 +53,12 @@ func TestGetOp(t *testing.T) {
 	}
 	for _, tCase := range testCases {
 		t.Run(tCase.name, func(t *testing.T) {
-			res, err := GetOp(tCase.path)
+			res, _, err := GetOp(tCase.path)
 			if tCase.expectError {
 				assert.Error(t, err, "expected error")
-			} else {
-				assert.Equal(t, tCase.expectedValue, res, "unexpected value")
+				return
 			}
+			assert.Equal(t, tCase.expectedValue, res, "unexpected value")
 		})
 	}
 }
@@ -54,6 +82,65 @@ func TestGetInt(t *testing.T) {
 				assert.Error(t, err, "expected error")
 			} else {
 				assert.Equal(t, tCase.expectedValue, res, "unexpected value")
+			}
+		})
+	}
+}
+
+type MyResponseWriter struct {
+	header     http.Header
+	data       []byte
+	statusCode int
+}
+
+var _ (http.ResponseWriter) = (*MyResponseWriter)(nil)
+
+func (w *MyResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *MyResponseWriter) Write(data []byte) (int, error) {
+	w.data = append(w.data, data...)
+	return len(data), nil
+}
+
+func (w *MyResponseWriter) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
+}
+
+func TestList(t *testing.T) {
+	handler := operationsHandler{}
+	testCases := []struct {
+		name         string
+		url          string
+		expectStatus int
+		expectData   []string
+	}{
+		{"noVals", "/ops/list", 400, nil},
+		{"oneVal", "/ops/list?arg=1", 200, []string{"1"}},
+		{"oneVal", "/ops/list?arg=2&arg=5", 200, []string{"2", "5"}},
+	}
+	for _, tCase := range testCases {
+		t.Run(tCase.name, func(t *testing.T) {
+			writer := MyResponseWriter{header: make(http.Header)}
+			url := url.URL{}
+			url.Path = tCase.url
+			req := http.Request{}
+			req.URL = &url
+			req.Method = http.MethodGet
+
+			handler.ServeHTTP(&writer, &req)
+			if tCase.expectStatus != 200 {
+				assert.Equal(t, tCase.expectStatus, writer.statusCode, "unexpected status code")
+				return
+			}
+			var returned []testListObject
+			fmt.Printf("data: %s\n", string(writer.data))
+			err := json.Unmarshal(writer.data, &returned)
+			assert.NoError(t, err, "unexpected error in unmarshaling")
+			for i := 0; i < len(tCase.expectData); i++ {
+				assert.Equal(t, tCase.expectData[i], returned[i].D,
+					"expected data did not match")
 			}
 		})
 	}
